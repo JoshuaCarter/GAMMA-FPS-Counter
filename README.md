@@ -2,6 +2,10 @@
 
 Makes low-crouch ("prone") in **S.T.A.L.K.E.R. G.A.M.M.A.** actually useful — within the limits of what modding allows. It's a hacky workaround, not a proper prone system., but it's no worse than what we have now IMO.
 
+## Demo
+
+<video src="GAMMA Prone Fix.mp4" controls width="100%"></video>
+
 ## The problem
 
 Vanilla prone is fake. It's really just a low crouch: your view drops, but your body stays much higher. You can:
