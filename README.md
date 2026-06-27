@@ -25,6 +25,7 @@ Vanilla prone is fake. It's really just a low crouch: your view drops, but your 
 - **Third person** — looks ridiculous
 - Getting in and out of prone is janky but this only affects shadows (and it's less janky than current shadows anyway)
 - Best effort given modding constraints — also my first mod - don't expect too much
+- You take 20% more damage by default when prone, but you can adjust that (100% - 200%) in an effort to compensate for the missing limbs...
 
 ## Installation
 
