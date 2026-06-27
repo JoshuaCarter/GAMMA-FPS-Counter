@@ -14,11 +14,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read version from meta.ini
+        id: meta
+        run: |
+          VERSION=$(grep -E '^version=' meta.ini | head -1 | cut -d'=' -f2 | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build mod zip
         run: |
-          zip -r "Dorns-Prone-Fix-${{ github.event.release.tag_name }}.zip" gamedata meta.ini
+          zip -r "Dorns-Prone-Fix-${{ steps.meta.outputs.version }}.zip" gamedata meta.ini
 
       - name: Attach zip to release
         uses: softprops/action-gh-release@v2
         with:
-          files: "Dorns-Prone-Fix-${{ github.event.release.tag_name }}.zip"
+          files: "Dorns-Prone-Fix-${{ steps.meta.outputs.version }}.zip"
