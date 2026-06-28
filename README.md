@@ -1,5 +1,7 @@
 # GAMMA Prone Fix
 
+## Just watch the video :)
+
 Makes low-crouch ("prone") in **S.T.A.L.K.E.R. G.A.M.M.A.** actually useful — within the limits of what modding allows. It's a hacky workaround, not a proper prone system., but it's no worse than what we have now IMO.
 
 ## Demo
