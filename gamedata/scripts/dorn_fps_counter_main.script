@@ -1,183 +1,186 @@
 --[[
 	Dorn's FPS Counter
 
-	Steam-style on-screen FPS readout. Frame times are sampled every frame;
-	display text (avg and optional min/max) refreshes at the configured rate
-	over a sliding time window.
+	Each frame records time_global (ms). Before each refresh, drop oldest samples past
+	sample_window; FPS = remaining count / sample_window. Min/max use the same prune
+	then scan on stored per-refresh averages (minmax_window seconds, 0 = hidden).
 ]]
 
 local MOD_ID = "dorn_fps_counter"
-local HUD_MARGIN = 8
-local DISPLAY_WIDTH = 14
+local UI_WIDTH = 1024
+local UI_HEIGHT = 768
+
+local FONTS = {
+	[0] = assert(GetFontLetterica18Russian()),
+	[1] = assert(GetFontLetterica25()),
+}
 
 local CONFIG = {
 	toggle_key = nil,
 	enabled_default = true,
-	location = 0,
-	text_size = 2,
-	show_minmax = true,
-	time_scale = 1,
-	update_rate = 5,
-	transparency = 1,
-	bg_r = 0,
-	bg_g = 0,
-	bg_b = 0,
+	minmax_window = 5,
+	sample_window = 0.1,
+	refresh_rate = 3,
+	pos_x = 0,
+	pos_y = 0,
+	font = FONTS[0],
 	text_r = 255,
 	text_g = 255,
 	text_b = 255,
+	text_a = 255,
+	debug_log = false,
 }
 
-local visible = false
 local hud = nil
-local session_ready = false
-local sample_buf = {}
-local sample_idx = 1
-local sample_count = 0
-local sample_cap = 120
-local next_display_t = 0
-local m_floor = math.floor
+local init = false
+local visible = false
+local sample_buf = nil
+local minmax_buf = nil
+local next_display_time = 0
+local wait_until_time = 0
 
-local function mcm_rgb(mod_id, key, default)
-	local value = _G.dorn_mcm.get(mod_id, key, default)
-	if type(value) == "table" then
-		return value[1] or default[1], value[2] or default[2], value[3] or default[3]
+local LOG = {
+	STATE = { order = 0, color = "gray" },
+	SAMPLE = { order = 1, color = "green" },
+}
+
+local function log(slot, msg)
+	if _G.dorn_dbg and CONFIG.debug_log then
+		_G.dorn_dbg.write(MOD_ID, slot.order, "[FPS] " .. tostring(msg), _G.dorn_dbg.COLORS[slot.color])
 	end
-	return default[1], default[2], default[3]
+end
+
+local function update_wait_until_time()
+	wait_until_time = device():time_global() + CONFIG.sample_window * 1000
 end
 
 local function on_option_change()
-	CONFIG.toggle_key = _G.dorn_mcm.key(MOD_ID, "main/toggle_key")
 	CONFIG.enabled_default = _G.dorn_mcm.bool(MOD_ID, "main/enabled_default", true)
-	CONFIG.location = _G.dorn_mcm.number(MOD_ID, "main/location", 0)
-	CONFIG.text_size = _G.dorn_mcm.number(MOD_ID, "main/text_size", 2)
-	CONFIG.show_minmax = _G.dorn_mcm.bool(MOD_ID, "main/show_minmax", true)
-	CONFIG.time_scale = _G.dorn_mcm.number(MOD_ID, "main/time_scale", 1)
-	CONFIG.update_rate = _G.dorn_mcm.number(MOD_ID, "main/update_rate", 5)
-	CONFIG.transparency = _G.dorn_mcm.number(MOD_ID, "main/transparency", 1)
-	CONFIG.bg_r, CONFIG.bg_g, CONFIG.bg_b = mcm_rgb(MOD_ID, "main/bg_color", { 0, 0, 0 })
-	CONFIG.text_r, CONFIG.text_g, CONFIG.text_b = mcm_rgb(MOD_ID, "main/text_color", { 255, 255, 255 })
+	CONFIG.debug_log = _G.dorn_mcm.bool(MOD_ID, "development/debug_log", false)
+	CONFIG.toggle_key = _G.dorn_mcm.key(MOD_ID, "main/toggle_key", 0)
+	CONFIG.sample_window = _G.dorn_mcm.number(MOD_ID, "main/sample_window", 1)
+	CONFIG.minmax_window = _G.dorn_mcm.number(MOD_ID, "main/minmax_window", 5)
+	CONFIG.refresh_rate = _G.dorn_mcm.number(MOD_ID, "main/refresh_rate", 5)
+	CONFIG.font = FONTS[_G.dorn_mcm.number(MOD_ID, "main/font", 0)]
+	CONFIG.pos_x = _G.dorn_mcm.number(MOD_ID, "main/pos_x", 0)
+	CONFIG.pos_y = _G.dorn_mcm.number(MOD_ID, "main/pos_y", 0)
+	CONFIG.text_r = _G.dorn_mcm.number(MOD_ID, "main/text_r", 255)
+	CONFIG.text_g = _G.dorn_mcm.number(MOD_ID, "main/text_g", 255)
+	CONFIG.text_b = _G.dorn_mcm.number(MOD_ID, "main/text_b", 255)
+	CONFIG.text_a = _G.dorn_mcm.number(MOD_ID, "main/text_a", 255)
 
-	-- ~120 fps ceiling for buffer sizing over the sample window
-	sample_cap = math.max(30, m_floor(CONFIG.time_scale * 120 + 0.5))
-	if sample_count > sample_cap then
-		sample_buf = {}
-		sample_idx = 1
-		sample_count = 0
+	_G.dorn_dbg.set_enabled(MOD_ID, CONFIG.debug_log)
+
+	local sample_len = math.max(1, math.floor(CONFIG.sample_window * 250 + 0.5))
+	if not sample_buf or sample_buf.cap ~= sample_len then
+		sample_buf = _G.dorn_ring_buffer.new(sample_len)
+	end
+
+	local minmax_len = math.max(1, math.floor(CONFIG.minmax_window * CONFIG.refresh_rate + 0.5))
+	if not minmax_buf or minmax_buf.cap ~= minmax_len then
+		minmax_buf = _G.dorn_ring_buffer.new(minmax_len)
 	end
 
 	if hud then
 		hud:ApplyConfig(CONFIG)
 	end
+
+	update_wait_until_time()
 end
 
-local function screen_size()
-	local dev = device()
-	if dev and dev.width and dev.height then
-		return dev:width(), dev:height()
+
+local function get_fps(current_time_ms)
+	if not sample_buf or sample_buf.count <= 0 then
+		return 0
 	end
-	return 1024, 768
+
+	local cutoff_time_ms = current_time_ms - CONFIG.sample_window * 1000
+
+	while sample_buf.count > 0 and sample_buf:get(1) < cutoff_time_ms do
+		sample_buf:shift()
+	end
+
+	return math.floor(sample_buf.count / CONFIG.sample_window + 0.5)
 end
 
-local function format_line(avg_fps, min_fps, max_fps)
-	local text
-	if CONFIG.show_minmax then
-		text = string.format("%3d (%3d-%3d)", avg_fps, min_fps, max_fps)
-	else
-		text = string.format("%3d fps", avg_fps)
-	end
-	if #text < DISPLAY_WIDTH then
-		text = text .. string.rep(" ", DISPLAY_WIDTH - #text)
-	elseif #text > DISPLAY_WIDTH then
-		text = string.sub(text, 1, DISPLAY_WIDTH)
-	end
-	return text
-end
-
-local function compute_stats()
-	if sample_count <= 0 then
-		return 0, 0, 0
+local function get_minmax_fps(current_time_ms)
+	if not minmax_buf or minmax_buf.count <= 0 then
+		return 0, 0
 	end
 
-	local sum = 0
-	local min_t = 1e9
-	local max_t = 0
+	local cutoff = current_time_ms - CONFIG.minmax_window * 1000
 
-	for i = 1, sample_count do
-		local t = sample_buf[i]
-		if t and t > 0 then
-			sum = sum + t
-			if t < min_t then
-				min_t = t
-			end
-			if t > max_t then
-				max_t = t
-			end
+	while minmax_buf.count > 0 and minmax_buf:get(1)[2] < cutoff do
+		minmax_buf:shift()
+	end
+
+	local min_fps, max_fps = nil, nil
+
+	for i = 1, minmax_buf.count do
+		local a = minmax_buf:get(i)[1]
+		if not min_fps or a < min_fps then
+			min_fps = a
+		end
+		if not max_fps or a > max_fps then
+			max_fps = a
 		end
 	end
 
-	if sum <= 0 then
-		return 0, 0, 0
-	end
-
-	local avg_fps = m_floor(sample_count / sum + 0.5)
-	local min_fps = max_t > 0 and m_floor(1 / max_t + 0.5) or 0
-	local max_fps = min_t > 0 and m_floor(1 / min_t + 0.5) or 0
-	return avg_fps, min_fps, max_fps
+	return min_fps or 0, max_fps or 0
 end
 
 local function on_unique_update()
-	local f_time = device().f_time_delta
-	if not f_time or f_time <= 0 then
+	if not sample_buf or not minmax_buf or not hud then
+		log(LOG.STATE, string.format(
+			"State: skipping due to empty vars (sample_buf=%s, minmax_buf=%s, hud=%s)",
+			tostring(sample_buf ~= nil),
+			tostring(minmax_buf ~= nil),
+			tostring(hud ~= nil)
+		))
 		return
 	end
 
-	-- ring buffer of frame times over the sample window
-	sample_buf[sample_idx] = f_time
-	sample_idx = sample_idx + 1
-	if sample_idx > sample_cap then
-		sample_idx = 1
-	end
-	if sample_count < sample_cap then
-		sample_count = sample_count + 1
-	end
-	-- old slot overwritten; no running sum needed for modest buffer sizes
+	local current_time_ms = device():time_global()
 
-	local tg = device():time_global()
-	local interval = math.max(33, m_floor(1000 / math.max(1, CONFIG.update_rate) + 0.5))
-	if tg < next_display_t or not hud then
+	-- store current time
+	log(LOG.SAMPLE, string.format("Sample: %d", current_time_ms))
+	sample_buf:push(current_time_ms)
+
+	-- check if enough time has passed to have an accurate fps value
+	local newest_time_ms = current_time_ms
+	if newest_time_ms < wait_until_time then
+		log(LOG.STATE, string.format(
+			"State: Warming up (new: %dms, wait: %dms, n=%d)",
+			newest_time_ms, wait_until_time, sample_buf.count
+		))
+		hud:SetLine("...")
 		return
 	end
-	next_display_t = tg + interval
 
-	local avg_fps, min_fps, max_fps = compute_stats()
-	hud:SetLine(format_line(avg_fps, min_fps, max_fps))
-end
-
-local function close_hud()
-	if hud then
-		RemoveUniqueCall(on_unique_update)
-		get_hud():RemoveDialogToRender(hud)
-		hud = nil
-	end
-end
-
-local function open_hud()
-	if hud then
+	-- check if it's time to update the HUD and exit if not
+	local interval = math.floor(1000 / math.max(1, CONFIG.refresh_rate) + 0.5)
+	if current_time_ms < next_display_time then
+		log(LOG.STATE, "State: Waiting")
 		return
 	end
-	hud = ui_dorn_fps_counter()
-	hud:ApplyConfig(CONFIG)
-	get_hud():AddDialogToRender(hud)
-	next_display_t = 0
-	AddUniqueCall(on_unique_update)
-end
+	next_display_time = current_time_ms + interval
 
-local function set_visible(state)
-	visible = state == true
-	if visible then
-		open_hud()
+	-- get the FPS
+	local fps = get_fps(current_time_ms)
+
+	-- store the FPS in the min/max buffer if enabled
+	if CONFIG.minmax_window > 0 then
+		minmax_buf:push({ fps, current_time_ms })
+	end
+
+	log(LOG.STATE, "State: Refreshing")
+
+	-- display the FPS in the HUD
+	if CONFIG.minmax_window > 0 then
+		local min_fps, max_fps = get_minmax_fps(current_time_ms)
+		hud:SetLine(string.format("%3d (%3d-%3d)", fps, min_fps, max_fps))
 	else
-		close_hud()
+		hud:SetLine(string.format("%3d", fps))
 	end
 end
 
@@ -187,32 +190,38 @@ local function on_actor_on_update()
 		return
 	end
 
-	if not session_ready then
-		session_ready = true
-		set_visible(CONFIG.enabled_default)
+	if not init then
+		init = true
+		visible = CONFIG.enabled_default
 		return
 	end
 
 	if visible and not hud then
-		open_hud()
+		hud = ui_dorn_fps_counter()
+		hud:ApplyConfig(CONFIG)
+		get_hud():AddDialogToRender(hud)
+		next_display_time = 0
+		AddUniqueCall(on_unique_update)
 	elseif not visible and hud then
-		close_hud()
+		RemoveUniqueCall(on_unique_update)
+		get_hud():RemoveDialogToRender(hud)
+		hud = nil
 	end
 end
 
 local function on_key_press(key)
 	if CONFIG.toggle_key and key == CONFIG.toggle_key then
-		set_visible(not visible)
+		visible = not visible
+		update_wait_until_time()
 	end
 end
 
 function on_game_start()
-	session_ready = false
+	init = false
 	visible = false
-	sample_buf = {}
-	sample_idx = 1
-	sample_count = 0
-	next_display_t = 0
+	sample_buf = nil
+	minmax_buf = nil
+	next_display_time = 0
 	hud = nil
 
 	RegisterScriptCallback("actor_on_update", on_actor_on_update)
@@ -225,61 +234,43 @@ end
 class "ui_dorn_fps_counter" (CUIScriptWnd)
 
 function ui_dorn_fps_counter:__init() super()
+	self.cfg = CONFIG
 	self:InitControls()
 end
 
 function ui_dorn_fps_counter:InitControls()
-	self:SetWndRect(Frect():set(0, 0, 1024, 768))
+	self:SetWndRect(Frect():set(0, 0, UI_WIDTH, UI_HEIGHT))
 	self:SetAutoDelete(true)
 
 	self.xml = CScriptXmlInit()
 	self.xml:ParseFile("ui_dorn_fps_counter_16.xml")
 
 	self.wnd = self.xml:InitStatic("wnd", self)
-	self.bg = self.xml:InitStatic("wnd:bg", self.wnd)
+	self.label_shadow = self.xml:InitTextWnd("wnd:label_shadow", self.wnd)
 	self.label = self.xml:InitTextWnd("wnd:label", self.wnd)
 
-	self.fonts = {
-		GetFontSmall(),
-		GetFontMedium(),
-		GetFontLetterica18Russian(),
-		GetFontLetterica25(),
-	}
+	pcall(function()
+		self.label:SetTextComplexMode(true)
+		self.label_shadow:SetTextComplexMode(true)
+	end)
 end
 
 function ui_dorn_fps_counter:ApplyConfig(cfg)
-	local alpha = math.max(0, math.min(255, m_floor((cfg.transparency or 1) * 255 + 0.5)))
-	self.bg:SetTextureColor(GetARGB(alpha, cfg.bg_r, cfg.bg_g, cfg.bg_b))
-	self.label:SetTextColor(GetARGB(alpha, cfg.text_r, cfg.text_g, cfg.text_b))
+	self.cfg = cfg
 
-	local font = self.fonts[cfg.text_size] or self.fonts[2]
-	self.label:SetFont(font)
+	self.label:SetFont(cfg.font)
+	self.label_shadow:SetFont(cfg.font)
 
-	-- corner placement and horizontal alignment
-	local sw, sh = screen_size()
-	local ww = self.wnd:GetWidth()
-	local wh = self.wnd:GetHeight()
-	local x = HUD_MARGIN
-	local y = HUD_MARGIN
-	local align = 0
-
-	if cfg.location == 1 then
-		x = sw - ww - HUD_MARGIN
-		align = 2
-	elseif cfg.location == 2 then
-		y = sh - wh - HUD_MARGIN
-	elseif cfg.location == 3 then
-		x = sw - ww - HUD_MARGIN
-		y = sh - wh - HUD_MARGIN
-		align = 2
-	end
-
-	self.wnd:SetWndPos(vector2():set(x, y))
+	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
 	pcall(function()
-		self.label:SetTextAlignment(align)
+		self.label:SetTextAlignment(0)
+		self.label_shadow:SetTextAlignment(0)
 	end)
 end
 
 function ui_dorn_fps_counter:SetLine(text)
-	self.label:SetText(text)
+	local colored = string.format("%%c[%d,%d,%d,%d]%s%%c[default]", self.cfg.text_a, self.cfg.text_r, self.cfg.text_g, self.cfg.text_b, text)
+	local shadow = string.format("%%c[255,0,0,0]%s%%c[default]", text)
+	self.label_shadow:SetText(shadow)
+	self.label:SetText(colored)
 end
