@@ -13,3 +13,6 @@ A simple FPS readout for **S.T.A.L.K.E.R. G.A.M.M.A.** — average FPS on screen
 
 1. Download the latest release from [GAMMA-FPS-Counter](https://github.com/JoshuaCarter/GAMMA-FPS-Counter/releases)
 2. Install via MO2 like normal
+
+<img width="960" height="540" alt="screenshot_1" src="https://github.com/user-attachments/assets/d28635cb-cc67-4e69-9c69-e830eab15142" />
+<img width="500" height="408" alt="screenshot_2" src="https://github.com/user-attachments/assets/e073bc9e-8e02-424a-9887-5015ec93b679" />
