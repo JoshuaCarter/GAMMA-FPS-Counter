@@ -7,9 +7,9 @@
 ]]
 
 local MOD_ID = "dorn_fps_counter"
+local COMMON = "dorn_common_e96dd465" -- bump via sync-dorn-common.sh
 
-process_file("dorn_fps_counter_common")
-local DORN = dorn_fps_counter_common.get()
+local DORN
 
 local UI_WIDTH = 1024
 local UI_HEIGHT = 768
@@ -221,7 +221,7 @@ local function on_key_press(key)
 end
 
 function on_game_start()
-	dorn_fps_counter_common.init(MOD_ID)
+	DORN = _G[COMMON].load(MOD_ID)
 
 	init = false
 	visible = false
