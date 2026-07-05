@@ -182,9 +182,9 @@ local function on_unique_update()
 	-- display the FPS in the HUD
 	if CONFIG.minmax_window > 0 then
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
-		hud:SetLine(string.format("%3d (%3d-%3d)", fps, min_fps, max_fps))
+		hud:SetLine(string.format("%d (%d-%d)", fps, min_fps, max_fps))
 	else
-		hud:SetLine(string.format("%3d", fps))
+		hud:SetLine(string.format("%d", fps))
 	end
 end
 
@@ -252,12 +252,11 @@ function ui_dorn_fps_counter:InitControls()
 	self.xml:ParseFile("ui_dorn_fps_counter_16.xml")
 
 	self.wnd = self.xml:InitStatic("wnd", self)
-	self.label_shadow = self.xml:InitTextWnd("wnd:label_shadow", self.wnd)
 	self.label = self.xml:InitTextWnd("wnd:label", self.wnd)
 
 	pcall(function()
 		self.label:SetTextComplexMode(true)
-		self.label_shadow:SetTextComplexMode(true)
+		self.label:SetTextAlignment(0) -- alLeft
 	end)
 end
 
@@ -265,18 +264,13 @@ function ui_dorn_fps_counter:ApplyConfig(cfg)
 	self.cfg = cfg
 
 	self.label:SetFont(cfg.font)
-	self.label_shadow:SetFont(cfg.font)
-
-	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
 	pcall(function()
-		self.label:SetTextAlignment(0)
-		self.label_shadow:SetTextAlignment(0)
+		self.label:SetTextAlignment(0) -- alLeft; reapply after SetFont
 	end)
+	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
 end
 
 function ui_dorn_fps_counter:SetLine(text)
 	local colored = string.format("%%c[%d,%d,%d,%d]%s%%c[default]", self.cfg.text_a, self.cfg.text_r, self.cfg.text_g, self.cfg.text_b, text)
-	local shadow = string.format("%%c[255,0,0,0]%s%%c[default]", text)
-	self.label_shadow:SetText(shadow)
 	self.label:SetText(colored)
 end
