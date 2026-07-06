@@ -27,6 +27,9 @@
 	<string id="ui_mcm_dorn_fps_counter_sample_window">
 		<text>How many seconds of frame times to average for FPS</text>
 	</string>
+	<string id="ui_mcm_dorn_fps_counter_max_fps">
+		<text>Expected max FPS (sets frame-time buffer size; raise if you run above this and readings look wrong)</text>
+	</string>
 	<string id="ui_mcm_dorn_fps_counter_minmax_window">
 		<text>How many seconds of data to look back for min/max FPS (0 = off)</text>
 	</string>

@@ -4,6 +4,9 @@
 	Each frame records time_global (ms). Before each refresh, drop oldest samples past
 	sample_window; FPS = remaining count / sample_window. Min/max use the same prune
 	then scan on stored per-refresh averages (minmax_window seconds, 0 = hidden).
+
+	sample_buf capacity = ceil(sample_window * max_fps): one slot per frame at up to max_fps.
+	minmax_buf capacity = minmax_window * refresh_rate: one slot per HUD refresh in the window.
 ]]
 
 local MOD_ID = "dorn_fps_counter"
@@ -24,6 +27,7 @@ local CONFIG = {
 	enabled_default = true,
 	minmax_window = 5,
 	sample_window = 0.5,
+	max_fps = 144,
 	refresh_rate = 3,
 	pos_x = 0,
 	pos_y = 0,
@@ -63,6 +67,7 @@ local function on_option_change()
 	CONFIG.debug_log = DORN.mcm.bool(MOD_ID, "development/debug_log", false)
 	CONFIG.toggle_key = DORN.mcm.key(MOD_ID, "main/toggle_key", 0)
 	CONFIG.sample_window = DORN.mcm.number(MOD_ID, "main/sample_window", 0.5)
+	CONFIG.max_fps = math.max(60, math.min(500, DORN.mcm.number(MOD_ID, "main/max_fps", 144)))
 	CONFIG.minmax_window = DORN.mcm.number(MOD_ID, "main/minmax_window", 5)
 	CONFIG.refresh_rate = DORN.mcm.number(MOD_ID, "main/refresh_rate", 3)
 	CONFIG.font = FONTS[DORN.mcm.number(MOD_ID, "main/font", 0)]
@@ -75,7 +80,7 @@ local function on_option_change()
 
 	DORN.dbg.set_enabled(MOD_ID, CONFIG.debug_log)
 
-	local sample_len = math.max(1, math.floor(CONFIG.sample_window * 250 + 0.5))
+	local sample_len = math.max(1, math.ceil(CONFIG.sample_window * CONFIG.max_fps))
 	if not sample_buf or sample_buf.cap ~= sample_len then
 		sample_buf = _G.dorn_ring_buffer.new(sample_len)
 	end
@@ -157,7 +162,11 @@ local function on_unique_update()
 			"State: Warming up (new: %dms, wait: %dms, n=%d)",
 			newest_time_ms, wait_until_time, sample_buf.count
 		))
-		hud:SetLine("...")
+		if CONFIG.minmax_window > 0 then
+			hud:SetDetailed("...", "...", "...")
+		else
+			hud:SetSimple("...")
+		end
 		return
 	end
 
@@ -182,9 +191,9 @@ local function on_unique_update()
 	-- display the FPS in the HUD
 	if CONFIG.minmax_window > 0 then
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
-		hud:SetLine(string.format("%d (%d-%d)", fps, min_fps, max_fps))
+		hud:SetDetailed(fps, min_fps, max_fps)
 	else
-		hud:SetLine(string.format("%d", fps))
+		hud:SetSimple(fps)
 	end
 end
 
@@ -237,10 +246,19 @@ end
 
 -- HUD ------------------------------------------------------------------------
 
+local function init_text_wnd(wnd)
+	pcall(function()
+		wnd:SetTextComplexMode(true)
+		wnd:SetTextAlignment(0) -- alLeft
+	end)
+	return wnd
+end
+
 class "ui_dorn_fps_counter" (CUIScriptWnd)
 
 function ui_dorn_fps_counter:__init() super()
 	self.cfg = CONFIG
+	self.detailed = false
 	self:InitControls()
 end
 
@@ -252,25 +270,79 @@ function ui_dorn_fps_counter:InitControls()
 	self.xml:ParseFile("ui_dorn_fps_counter_16.xml")
 
 	self.wnd = self.xml:InitStatic("wnd", self)
-	self.label = self.xml:InitTextWnd("wnd:label", self.wnd)
+	self.fps_simple = init_text_wnd(self.xml:InitTextWnd("wnd:fps_simple", self.wnd))
+	self.fps_lbl = init_text_wnd(self.xml:InitTextWnd("wnd:fps_lbl", self.wnd))
+	self.fps_val = init_text_wnd(self.xml:InitTextWnd("wnd:fps_val", self.wnd))
+	self.min_lbl = init_text_wnd(self.xml:InitTextWnd("wnd:min_lbl", self.wnd))
+	self.min_val = init_text_wnd(self.xml:InitTextWnd("wnd:min_val", self.wnd))
+	self.max_lbl = init_text_wnd(self.xml:InitTextWnd("wnd:max_lbl", self.wnd))
+	self.max_val = init_text_wnd(self.xml:InitTextWnd("wnd:max_val", self.wnd))
 
-	pcall(function()
-		self.label:SetTextComplexMode(true)
-		self.label:SetTextAlignment(0) -- alLeft
-	end)
+	self.text_wnds = {
+		self.fps_simple,
+		self.fps_lbl,
+		self.fps_val,
+		self.min_lbl,
+		self.min_val,
+		self.max_lbl,
+		self.max_val,
+	}
+
+	self:SetMode(false)
+end
+
+function ui_dorn_fps_counter:Colored(text)
+	return string.format(
+		"%%c[%d,%d,%d,%d]%s%%c[default]",
+		self.cfg.text_a,
+		self.cfg.text_r,
+		self.cfg.text_g,
+		self.cfg.text_b,
+		tostring(text)
+	)
+end
+
+function ui_dorn_fps_counter:SetMode(detailed)
+	self.detailed = detailed == true
+
+	self.fps_simple:Show(not self.detailed)
+	self.fps_lbl:Show(self.detailed)
+	self.fps_val:Show(self.detailed)
+	self.min_lbl:Show(self.detailed)
+	self.min_val:Show(self.detailed)
+	self.max_lbl:Show(self.detailed)
+	self.max_val:Show(self.detailed)
+end
+
+function ui_dorn_fps_counter:SetSimple(fps)
+	if self.detailed then
+		self:SetMode(false)
+	end
+	self.fps_simple:SetText(self:Colored(fps))
+end
+
+function ui_dorn_fps_counter:SetDetailed(fps, min_fps, max_fps)
+	if not self.detailed then
+		self:SetMode(true)
+	end
+	self.fps_val:SetText(self:Colored(fps))
+	self.min_val:SetText(self:Colored(min_fps))
+	self.max_val:SetText(self:Colored(max_fps))
 end
 
 function ui_dorn_fps_counter:ApplyConfig(cfg)
 	self.cfg = cfg
 
-	self.label:SetFont(cfg.font)
-	pcall(function()
-		self.label:SetTextAlignment(0) -- alLeft; reapply after SetFont
-	end)
-	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
-end
+	for _, wnd in ipairs(self.text_wnds) do
+		wnd:SetFont(cfg.font)
+		pcall(function()
+			wnd:SetTextAlignment(0) -- alLeft; reapply after SetFont
+		end)
+	end
 
-function ui_dorn_fps_counter:SetLine(text)
-	local colored = string.format("%%c[%d,%d,%d,%d]%s%%c[default]", self.cfg.text_a, self.cfg.text_r, self.cfg.text_g, self.cfg.text_b, text)
-	self.label:SetText(colored)
+	self:SetMode(cfg.minmax_window > 0)
+	self.fps_lbl:SetText(self:Colored("FPS:"))
+	self.min_lbl:SetText(self:Colored("Min:"))
+	self.max_lbl:SetText(self:Colored("Max:"))
+	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
 end

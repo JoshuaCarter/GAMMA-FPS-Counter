@@ -33,6 +33,16 @@ function on_mcm_load()
 						hint = "dorn_fps_counter_sample_window",
 					},
 					{
+						id = "max_fps",
+						type = "track",
+						val = 2,
+						min = 60,
+						max = 500,
+						step = 1,
+						def = 144,
+						hint = "dorn_fps_counter_max_fps",
+					},
+					{
 						id = "minmax_window",
 						type = "track",
 						val = 2,
