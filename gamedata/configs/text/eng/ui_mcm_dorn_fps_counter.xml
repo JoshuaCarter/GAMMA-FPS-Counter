@@ -6,6 +6,9 @@
 	<string id="ui_mcm_dorn_fps_counter_main_section">
 		<text>Main</text>
 	</string>
+	<string id="ui_mcm_dorn_fps_counter_colors_section">
+		<text>Colors</text>
+	</string>
 	<string id="ui_mcm_dorn_fps_counter_development_section">
 		<text>Development</text>
 	</string>
@@ -14,6 +17,27 @@
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_enabled_default">
 		<text>On by default</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_display">
+		<text>Display</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_simple_small">
+		<text>FPS only - Small</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_simple_large">
+		<text>FPS only - Large</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_detailed_small">
+		<text>FPS and min/max - Small</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_detailed_large">
+		<text>FPS and min/max - Large</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_graph_small">
+		<text>Graph with FPS and min/max - Small</text>
+	</string>
+	<string id="dorn_fps_counter_main_display_lst_graph_large">
+		<text>Graph with FPS and min/max - Large</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_pos_desc">
 		<text>Top-left position in HUD pixels (0-1024 x 0-768)</text>
@@ -28,22 +52,13 @@
 		<text>How many seconds of frame times to average for FPS</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_max_fps">
-		<text>Expected max FPS (sets frame-time buffer size; raise if you run above this and readings look wrong)</text>
+		<text>Expected max FPS (affects graph scale and internal memory usage) </text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_minmax_window">
-		<text>How many seconds of data to look back for min/max FPS (0 = off)</text>
+		<text>History window in seconds for min/max and graph</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_refresh_rate">
-		<text>FPS readout refreshes this many times per second</text>
-	</string>
-	<string id="ui_mcm_dorn_fps_counter_font">
-		<text>Font</text>
-	</string>
-	<string id="dorn_fps_counter_main_font_lst_small">
-		<text>Small</text>
-	</string>
-	<string id="dorn_fps_counter_main_font_lst_large">
-		<text>Large</text>
+		<text>FPS and graph refreshes this many times per second</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_text_color_desc">
 		<text>Text color (RGBA 0-255)</text>
@@ -58,6 +73,36 @@
 		<text>Blue</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_text_a">
+		<text>Alpha</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_line_color_desc">
+		<text>Graph line color (RGBA 0-255)</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_line_r">
+		<text>Red</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_line_g">
+		<text>Green</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_line_b">
+		<text>Blue</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_line_a">
+		<text>Alpha</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_border_color_desc">
+		<text>Graph border color (RGBA 0-255)</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_border_r">
+		<text>Red</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_border_g">
+		<text>Green</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_border_b">
+		<text>Blue</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_graph_border_a">
 		<text>Alpha</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_debug_log">

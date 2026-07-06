@@ -2,11 +2,11 @@
 	Dorn's FPS Counter
 
 	Each frame records time_global (ms). Before each refresh, drop oldest samples past
-	sample_window; FPS = remaining count / sample_window. Min/max use the same prune
-	then scan on stored per-refresh averages (minmax_window seconds, 0 = hidden).
+	sample_window; FPS = remaining count / sample_window. Min/max and graph history share
+	minmax_window (modes 3-6; graph modes use at least 1 second).
 
 	sample_buf capacity = ceil(sample_window * max_fps): one slot per frame at up to max_fps.
-	minmax_buf capacity = minmax_window * refresh_rate: one slot per HUD refresh in the window.
+	history_buf capacity = history_window * refresh_rate: one slot per HUD refresh.
 ]]
 
 local MOD_ID = "dorn_fps_counter"
@@ -17,6 +17,15 @@ local DORN
 local UI_WIDTH = 1024
 local UI_HEIGHT = 768
 
+local DISPLAY = {
+	SIMPLE_SMALL = 0,
+	SIMPLE_LARGE = 1,
+	DETAILED_SMALL = 2,
+	DETAILED_LARGE = 3,
+	GRAPH_SMALL = 4,
+	GRAPH_LARGE = 5,
+}
+
 local FONTS = {
 	[0] = assert(GetFontLetterica18Russian()),
 	[1] = assert(GetFontLetterica25()),
@@ -25,6 +34,7 @@ local FONTS = {
 local CONFIG = {
 	toggle_key = nil,
 	enabled_default = true,
+	display_mode = DISPLAY.SIMPLE_SMALL,
 	minmax_window = 5,
 	sample_window = 0.5,
 	max_fps = 144,
@@ -36,6 +46,14 @@ local CONFIG = {
 	text_g = 255,
 	text_b = 255,
 	text_a = 255,
+	graph_line_r = 255,
+	graph_line_g = 255,
+	graph_line_b = 255,
+	graph_line_a = 255,
+	graph_border_r = 96,
+	graph_border_g = 96,
+	graph_border_b = 96,
+	graph_border_a = 128,
 	debug_log = false,
 }
 
@@ -43,7 +61,8 @@ local hud = nil
 local init = false
 local visible = false
 local sample_buf = nil
-local minmax_buf = nil
+local history_buf = nil
+local graph_buf = nil
 local next_display_time = 0
 local wait_until_time = 0
 
@@ -53,8 +72,82 @@ local LOG = {
 }
 
 local function log(slot, msg)
-	if DORN.dbg and CONFIG.debug_log then
+	if DORN and DORN.dbg and CONFIG.debug_log then
 		DORN.dbg.write(MOD_ID, slot.order, "[FPS] " .. tostring(msg), slot.color)
+	end
+end
+
+local function display_font_idx(mode)
+	return mode % 2
+end
+
+local function display_graph_idx(mode)
+	return mode % 2
+end
+
+local function display_uses_graph(mode)
+	return mode >= DISPLAY.GRAPH_SMALL
+end
+
+local function display_uses_history(mode)
+	return mode >= DISPLAY.DETAILED_SMALL
+end
+
+local function history_window_sec()
+	if display_uses_graph(CONFIG.display_mode) then
+		return math.max(1, CONFIG.minmax_window)
+	end
+	return CONFIG.minmax_window
+end
+
+local function history_buf_cap()
+	return math.max(1, math.floor(history_window_sec() * CONFIG.refresh_rate + 0.5))
+end
+
+local function prune_history_buf(current_time_ms)
+	if not history_buf or history_buf.count <= 0 then
+		return
+	end
+	local window = history_window_sec()
+	if window <= 0 then
+		return
+	end
+	local cutoff = current_time_ms - window * 1000
+	while history_buf.count > 0 and history_buf:get(1)[2] < cutoff do
+		history_buf:shift()
+	end
+end
+
+local function prune_graph_buf(current_time_ms)
+	if not graph_buf or graph_buf.count <= 0 then
+		return
+	end
+	local cutoff = current_time_ms - history_window_sec() * 1000
+	while graph_buf.count > 0 and graph_buf:get(1)[2] < cutoff do
+		graph_buf:shift()
+	end
+end
+
+local function graph_clear()
+	if hud then
+		hud:ClearGraph()
+	end
+	if graph_buf then
+		graph_buf:clear()
+	end
+end
+
+local function graph_push(fps, current_time_ms)
+	if not display_uses_graph(CONFIG.display_mode) then
+		return
+	end
+	if not graph_buf or graph_buf.cap ~= history_buf_cap() then
+		graph_buf = _G.dorn_ring_buffer.new(history_buf_cap())
+	end
+	graph_buf:push({ fps, current_time_ms })
+	prune_graph_buf(current_time_ms)
+	if hud then
+		hud:DrawGraph(graph_buf, CONFIG)
 	end
 end
 
@@ -62,21 +155,34 @@ local function update_wait_until_time()
 	wait_until_time = device():time_global() + CONFIG.sample_window * 1000
 end
 
+local function mcm_byte(v)
+	return math.floor(math.max(0, math.min(255, tonumber(v) or 0) + 0.5))
+end
+
 local function on_option_change()
 	CONFIG.enabled_default = DORN.mcm.bool(MOD_ID, "main/enabled_default", true)
 	CONFIG.debug_log = DORN.mcm.bool(MOD_ID, "development/debug_log", false)
 	CONFIG.toggle_key = DORN.mcm.key(MOD_ID, "main/toggle_key", 0)
+	CONFIG.display_mode = DORN.mcm.number(MOD_ID, "main/display", DISPLAY.SIMPLE_SMALL)
 	CONFIG.sample_window = DORN.mcm.number(MOD_ID, "main/sample_window", 0.5)
 	CONFIG.max_fps = math.max(60, math.min(500, DORN.mcm.number(MOD_ID, "main/max_fps", 144)))
 	CONFIG.minmax_window = DORN.mcm.number(MOD_ID, "main/minmax_window", 5)
 	CONFIG.refresh_rate = DORN.mcm.number(MOD_ID, "main/refresh_rate", 3)
-	CONFIG.font = FONTS[DORN.mcm.number(MOD_ID, "main/font", 0)]
 	CONFIG.pos_x = DORN.mcm.number(MOD_ID, "main/pos_x", 0)
 	CONFIG.pos_y = DORN.mcm.number(MOD_ID, "main/pos_y", 0)
-	CONFIG.text_r = DORN.mcm.number(MOD_ID, "main/text_r", 255)
-	CONFIG.text_g = DORN.mcm.number(MOD_ID, "main/text_g", 255)
-	CONFIG.text_b = DORN.mcm.number(MOD_ID, "main/text_b", 255)
-	CONFIG.text_a = DORN.mcm.number(MOD_ID, "main/text_a", 255)
+	CONFIG.font = FONTS[display_font_idx(CONFIG.display_mode)]
+	CONFIG.text_r = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_r", 255))
+	CONFIG.text_g = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_g", 255))
+	CONFIG.text_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_b", 255))
+	CONFIG.text_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_a", 255))
+	CONFIG.graph_line_r = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_r", 255))
+	CONFIG.graph_line_g = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_g", 255))
+	CONFIG.graph_line_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_b", 255))
+	CONFIG.graph_line_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_a", 255))
+	CONFIG.graph_border_r = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_r", 96))
+	CONFIG.graph_border_g = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_g", 96))
+	CONFIG.graph_border_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_b", 96))
+	CONFIG.graph_border_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_a", 128))
 
 	DORN.dbg.set_enabled(MOD_ID, CONFIG.debug_log)
 
@@ -85,9 +191,13 @@ local function on_option_change()
 		sample_buf = _G.dorn_ring_buffer.new(sample_len)
 	end
 
-	local minmax_len = math.max(1, math.floor(CONFIG.minmax_window * CONFIG.refresh_rate + 0.5))
-	if not minmax_buf or minmax_buf.cap ~= minmax_len then
-		minmax_buf = _G.dorn_ring_buffer.new(minmax_len)
+	local hist_cap = history_buf_cap()
+	if not history_buf or history_buf.cap ~= hist_cap then
+		history_buf = _G.dorn_ring_buffer.new(hist_cap)
+	end
+	if not graph_buf or graph_buf.cap ~= hist_cap then
+		graph_buf = _G.dorn_ring_buffer.new(hist_cap)
+		graph_buf:clear()
 	end
 
 	if hud then
@@ -96,7 +206,6 @@ local function on_option_change()
 
 	update_wait_until_time()
 end
-
 
 local function get_fps(current_time_ms)
 	if not sample_buf or sample_buf.count <= 0 then
@@ -113,20 +222,16 @@ local function get_fps(current_time_ms)
 end
 
 local function get_minmax_fps(current_time_ms)
-	if not minmax_buf or minmax_buf.count <= 0 then
+	if not history_buf or history_buf.count <= 0 then
 		return 0, 0
 	end
 
-	local cutoff = current_time_ms - CONFIG.minmax_window * 1000
-
-	while minmax_buf.count > 0 and minmax_buf:get(1)[2] < cutoff do
-		minmax_buf:shift()
-	end
+	prune_history_buf(current_time_ms)
 
 	local min_fps, max_fps = nil, nil
 
-	for i = 1, minmax_buf.count do
-		local a = minmax_buf:get(i)[1]
+	for i = 1, history_buf.count do
+		local a = history_buf:get(i)[1]
 		if not min_fps or a < min_fps then
 			min_fps = a
 		end
@@ -139,38 +244,42 @@ local function get_minmax_fps(current_time_ms)
 end
 
 local function on_unique_update()
-	if not sample_buf or not minmax_buf or not hud then
+	if not sample_buf or not history_buf or not hud then
 		log(LOG.STATE, string.format(
-			"State: skipping due to empty vars (sample_buf=%s, minmax_buf=%s, hud=%s)",
+			"State: skipping due to empty vars (sample_buf=%s, history_buf=%s, hud=%s)",
 			tostring(sample_buf ~= nil),
-			tostring(minmax_buf ~= nil),
+			tostring(history_buf ~= nil),
 			tostring(hud ~= nil)
 		))
 		return
 	end
 
 	local current_time_ms = device():time_global()
+	local mode = CONFIG.display_mode
+	local use_graph = display_uses_graph(mode)
+	local use_history = display_uses_history(mode)
 
-	-- store current time
 	log(LOG.SAMPLE, string.format("Sample: %d", current_time_ms))
 	sample_buf:push(current_time_ms)
 
-	-- check if enough time has passed to have an accurate fps value
-	local newest_time_ms = current_time_ms
-	if newest_time_ms < wait_until_time then
+	if current_time_ms < wait_until_time then
 		log(LOG.STATE, string.format(
 			"State: Warming up (new: %dms, wait: %dms, n=%d)",
-			newest_time_ms, wait_until_time, sample_buf.count
+			current_time_ms, wait_until_time, sample_buf.count
 		))
-		if CONFIG.minmax_window > 0 then
+		if use_graph then
+			hud:SetGraphValues("...", "...", "...")
+			graph_clear()
+		elseif use_history then
 			hud:SetDetailed("...", "...", "...")
+			graph_clear()
 		else
 			hud:SetSimple("...")
+			graph_clear()
 		end
 		return
 	end
 
-	-- check if it's time to update the HUD and exit if not
 	local interval = math.floor(1000 / math.max(1, CONFIG.refresh_rate) + 0.5)
 	if current_time_ms < next_display_time then
 		log(LOG.STATE, "State: Waiting")
@@ -178,21 +287,24 @@ local function on_unique_update()
 	end
 	next_display_time = current_time_ms + interval
 
-	-- get the FPS
 	local fps = get_fps(current_time_ms)
 
-	-- store the FPS in the min/max buffer if enabled
-	if CONFIG.minmax_window > 0 then
-		minmax_buf:push({ fps, current_time_ms })
+	if use_history and history_window_sec() > 0 then
+		history_buf:push({ fps, current_time_ms })
 	end
 
 	log(LOG.STATE, "State: Refreshing")
 
-	-- display the FPS in the HUD
-	if CONFIG.minmax_window > 0 then
+	if use_graph then
+		local min_fps, max_fps = get_minmax_fps(current_time_ms)
+		hud:SetGraphValues(fps, min_fps, max_fps)
+		graph_push(fps, current_time_ms)
+	elseif use_history then
+		graph_clear()
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
 		hud:SetDetailed(fps, min_fps, max_fps)
 	else
+		graph_clear()
 		hud:SetSimple(fps)
 	end
 end
@@ -219,6 +331,7 @@ local function on_actor_on_update()
 		RemoveUniqueCall(on_unique_update)
 		get_hud():RemoveDialogToRender(hud)
 		hud = nil
+		graph_clear()
 	end
 end
 
@@ -235,7 +348,8 @@ function on_game_start()
 	init = false
 	visible = false
 	sample_buf = nil
-	minmax_buf = nil
+	history_buf = nil
+	graph_buf = nil
 	next_display_time = 0
 	hud = nil
 
@@ -245,6 +359,50 @@ function on_game_start()
 end
 
 -- HUD ------------------------------------------------------------------------
+
+-- Layout tables (edit here to tune). text[0/1] = small/large font; graph[0/1] = small/large graph.
+local HUD_LAYOUT = {
+	text = {
+		[0] = {
+			label_x = 0,
+			val_x = 18,
+			row_y = { fps = 0, min = 12, max = 24 },
+			simple = { x = 0, y = 0 },
+			wnd_w = 62,
+			wnd_h = 36,
+		},
+		[1] = {
+			label_x = 0,
+			val_x = 28,
+			row_y = { fps = 0, min = 20, max = 40 },
+			simple = { x = 0, y = 0 },
+			wnd_w = 72,
+			wnd_h = 62,
+		},
+	},
+	graph = {
+		[0] = {
+			graph = { x = 0, y = 0, width = 120, height = 40 },
+			values = { x = 124, max_y = 0, fps_y = 14, min_y = 29, w = 44, h = 12 },
+			wnd_w = 168,
+			wnd_h = 40,
+		},
+		[1] = {
+			graph = { x = 0, y = 0, width = 180, height = 60 },
+			values = { x = 186, max_y = 0, fps_y = 21, min_y = 43, w = 50, h = 18 },
+			wnd_w = 236,
+			wnd_h = 60,
+		},
+	},
+}
+
+local HUD_LAYOUT_VEC = vector2()
+-- Opaque 2x2 white fill from ui_common; PDA tooltip atlas dims SetTextureColor.
+local GRAPH_TEXTURE = "ui_inGame2_white_rect"
+
+local function argb_from_bytes(a, r, g, b)
+	return GetARGB(mcm_byte(a), mcm_byte(r), mcm_byte(g), mcm_byte(b))
+end
 
 local function init_text_wnd(wnd)
 	pcall(function()
@@ -258,7 +416,7 @@ class "ui_dorn_fps_counter" (CUIScriptWnd)
 
 function ui_dorn_fps_counter:__init() super()
 	self.cfg = CONFIG
-	self.detailed = false
+	self.display_mode = DISPLAY.SIMPLE_SMALL
 	self:InitControls()
 end
 
@@ -277,6 +435,9 @@ function ui_dorn_fps_counter:InitControls()
 	self.min_val = init_text_wnd(self.xml:InitTextWnd("wnd:min_val", self.wnd))
 	self.max_lbl = init_text_wnd(self.xml:InitTextWnd("wnd:max_lbl", self.wnd))
 	self.max_val = init_text_wnd(self.xml:InitTextWnd("wnd:max_val", self.wnd))
+	self.graph_max_val = init_text_wnd(self.xml:InitTextWnd("wnd:graph_max_val", self.wnd))
+	self.graph_fps_val = init_text_wnd(self.xml:InitTextWnd("wnd:graph_fps_val", self.wnd))
+	self.graph_min_val = init_text_wnd(self.xml:InitTextWnd("wnd:graph_min_val", self.wnd))
 
 	self.text_wnds = {
 		self.fps_simple,
@@ -286,9 +447,246 @@ function ui_dorn_fps_counter:InitControls()
 		self.min_val,
 		self.max_lbl,
 		self.max_val,
+		self.graph_max_val,
+		self.graph_fps_val,
+		self.graph_min_val,
 	}
 
-	self:SetMode(false)
+	self.wnd_rect = Frect()
+	self:InitGraph()
+	self:SetDisplayMode(DISPLAY.SIMPLE_SMALL)
+end
+
+function ui_dorn_fps_counter:SetWndPanelSize(w, h)
+	self.wnd_rect:set(0, 0, w, h)
+	self.wnd:SetWndRect(self.wnd_rect)
+end
+
+function ui_dorn_fps_counter:ApplyTextLayout(font_idx)
+	local layout = HUD_LAYOUT.text[font_idx] or HUD_LAYOUT.text[0]
+	local v = HUD_LAYOUT_VEC
+
+	local function place(wnd, x, y)
+		if wnd then
+			wnd:SetWndPos(v:set(x, y))
+		end
+	end
+
+	place(self.fps_simple, layout.simple.x, layout.simple.y)
+	place(self.fps_lbl, layout.label_x, layout.row_y.fps)
+	place(self.fps_val, layout.val_x, layout.row_y.fps)
+	place(self.min_lbl, layout.label_x, layout.row_y.min)
+	place(self.min_val, layout.val_x, layout.row_y.min)
+	place(self.max_lbl, layout.label_x, layout.row_y.max)
+	place(self.max_val, layout.val_x, layout.row_y.max)
+
+	self.layout = layout
+	self:SetWndPanelSize(layout.wnd_w, layout.wnd_h)
+end
+
+function ui_dorn_fps_counter:ApplyGraphLayout(graph_idx)
+	local layout = HUD_LAYOUT.graph[graph_idx] or HUD_LAYOUT.graph[0]
+	local g = layout.graph
+	local vals = layout.values
+	local v = HUD_LAYOUT_VEC
+
+	self.graph_rect = self.graph_rect or Frect()
+	self.graph_rect:set(g.x, g.y, g.x + g.width, g.y + g.height)
+	self.graph_root:SetWndRect(self.graph_rect)
+
+	self.graph_max_val:SetWndPos(v:set(vals.x, vals.max_y))
+	self.graph_fps_val:SetWndPos(v:set(vals.x, vals.fps_y))
+	self.graph_min_val:SetWndPos(v:set(vals.x, vals.min_y))
+
+	self.layout = layout
+	self:SetWndPanelSize(layout.wnd_w, layout.wnd_h)
+end
+
+function ui_dorn_fps_counter:InitGraph()
+	if self.graph_root then
+		return
+	end
+
+	self.graph_root = self.xml:InitStatic("wnd:graph_root", self.wnd)
+	self.graph_parts = {}
+	self.graph_part_count = 4
+	self.graph_rect = Frect()
+	self.part_rect = Frect()
+	for i = 1, 4 do
+		local st = self.xml:InitStatic("wnd:graph_pixel", self.graph_root)
+		st:Show(false)
+		self.graph_parts[i] = st
+	end
+	self:ApplyGraphColors(self.cfg)
+end
+
+function ui_dorn_fps_counter:ApplyStaticColor(st, r, g, b, a)
+	if not st then
+		return
+	end
+	if not st._dorn_graph_tex then
+		pcall(function()
+			st:RemoveColorAnimation()
+		end)
+		pcall(function()
+			st:InitTexture(GRAPH_TEXTURE)
+		end)
+		pcall(function()
+			st:SetStretchTexture(true)
+		end)
+		st._dorn_graph_tex = true
+	end
+	st:SetTextureColor(argb_from_bytes(a, r, g, b))
+end
+
+function ui_dorn_fps_counter:ApplyGraphColors(cfg)
+	if not self.graph_parts then
+		return
+	end
+	for i = 1, math.min(4, self.graph_part_count) do
+		self:ApplyStaticColor(
+			self.graph_parts[i],
+			cfg.graph_border_r, cfg.graph_border_g, cfg.graph_border_b, cfg.graph_border_a
+		)
+	end
+	for i = 5, self.graph_part_count do
+		self:ApplyStaticColor(
+			self.graph_parts[i],
+			cfg.graph_line_r, cfg.graph_line_g, cfg.graph_line_b, cfg.graph_line_a
+		)
+	end
+end
+
+function ui_dorn_fps_counter:EnsureGraphPart(idx)
+	while self.graph_part_count < idx do
+		self.graph_part_count = self.graph_part_count + 1
+		local st = self.xml:InitStatic("wnd:graph_pixel", self.graph_root)
+		st:Show(false)
+		self.graph_parts[self.graph_part_count] = st
+		self:ApplyStaticColor(
+			st,
+			self.cfg.graph_line_r, self.cfg.graph_line_g, self.cfg.graph_line_b, self.cfg.graph_line_a
+		)
+	end
+	return self.graph_parts[idx]
+end
+
+function ui_dorn_fps_counter:PlaceGraphPart(idx, x, y, w, h)
+	local st = self:EnsureGraphPart(idx)
+	local rect = self.part_rect
+	local pw = math.max(1, w)
+	local ph = math.max(1, h)
+	rect:set(x, y, x + pw, y + ph)
+	st:SetWndRect(rect)
+	if idx <= 4 then
+		self:ApplyStaticColor(
+			st,
+			self.cfg.graph_border_r, self.cfg.graph_border_g, self.cfg.graph_border_b, self.cfg.graph_border_a
+		)
+	else
+		self:ApplyStaticColor(
+			st,
+			self.cfg.graph_line_r, self.cfg.graph_line_g, self.cfg.graph_line_b, self.cfg.graph_line_a
+		)
+	end
+	st:Show(true)
+	return idx + 1
+end
+
+function ui_dorn_fps_counter:ClearGraph()
+	if not self.graph_parts then
+		return
+	end
+	for i = 1, self.graph_part_count do
+		self.graph_parts[i]:Show(false)
+	end
+end
+
+function ui_dorn_fps_counter:DrawGraph(buf, cfg)
+	if not display_uses_graph(cfg.display_mode) then
+		self:ClearGraph()
+		return
+	end
+	if not buf or buf.count <= 0 then
+		self:ClearGraph()
+		return
+	end
+
+	self:InitGraph()
+	self.cfg = cfg
+	self:ApplyGraphColors(cfg)
+
+	local layout = self.layout or HUD_LAYOUT.graph[0]
+	local g = layout.graph or HUD_LAYOUT.graph[0].graph
+	local max_fps = math.max(1, cfg.max_fps or 144)
+	local width = g.width
+	local height = g.height
+	local count = buf.count
+	local part = 1
+
+	local function sample_fps(i)
+		local entry = buf:get(i)
+		if type(entry) == "table" then
+			return entry[1]
+		end
+		return entry
+	end
+
+	local border_inset = 2
+	local x_inset = 2
+	local line_gap = 2
+	local top_border_y = 1
+	local bot_border_y = height - 1 - border_inset
+	local side_h = bot_border_y - top_border_y + 1
+	local plot_x_min = x_inset
+	local plot_x_max = width - 1 - x_inset
+	local plot_x_w = plot_x_max - plot_x_min
+	local plot_y_min = top_border_y + line_gap
+	local plot_y_max = bot_border_y - line_gap
+	local plot_y_h = plot_y_max - plot_y_min
+
+	local function y_for(fps)
+		local clamped = math.max(0, math.min(fps, max_fps))
+		if plot_y_h <= 0 then
+			return plot_y_min
+		end
+		return plot_y_max - math.floor(clamped / max_fps * plot_y_h + 0.5)
+	end
+
+	local function x_for(index)
+		if count <= 1 then
+			return plot_x_min
+		end
+		return plot_x_min + math.floor((index - 1) / (count - 1) * plot_x_w + 0.5)
+	end
+
+	part = self:PlaceGraphPart(part, 0, top_border_y, width, 1)
+	part = self:PlaceGraphPart(part, 0, bot_border_y, width, 1)
+	part = self:PlaceGraphPart(part, 0, top_border_y, 1, side_h)
+	part = self:PlaceGraphPart(part, width - 1, top_border_y, 1, side_h)
+
+	for i = 2, count do
+		local x0 = x_for(i - 1)
+		local y0 = y_for(sample_fps(i - 1))
+		local x1 = x_for(i)
+		local y1 = y_for(sample_fps(i))
+
+		if x1 ~= x0 then
+			local left = math.min(x0, x1)
+			part = self:PlaceGraphPart(part, left, y0, math.abs(x1 - x0), 1)
+		end
+		if y1 ~= y0 then
+			local seg_top = math.max(plot_y_min, math.min(y0, y1))
+			local seg_bot = math.min(plot_y_max, math.max(y0, y1))
+			if seg_bot >= seg_top then
+				part = self:PlaceGraphPart(part, x1, seg_top, 1, seg_bot - seg_top + 1)
+			end
+		end
+	end
+
+	for i = part, self.graph_part_count do
+		self.graph_parts[i]:Show(false)
+	end
 end
 
 function ui_dorn_fps_counter:Colored(text)
@@ -302,47 +700,78 @@ function ui_dorn_fps_counter:Colored(text)
 	)
 end
 
-function ui_dorn_fps_counter:SetMode(detailed)
-	self.detailed = detailed == true
+function ui_dorn_fps_counter:SetDisplayMode(mode)
+	self.display_mode = mode
+	local graph = display_uses_graph(mode)
+	local detailed = mode >= DISPLAY.DETAILED_SMALL and not graph
 
-	self.fps_simple:Show(not self.detailed)
-	self.fps_lbl:Show(self.detailed)
-	self.fps_val:Show(self.detailed)
-	self.min_lbl:Show(self.detailed)
-	self.min_val:Show(self.detailed)
-	self.max_lbl:Show(self.detailed)
-	self.max_val:Show(self.detailed)
+	self.fps_simple:Show(not graph and not detailed)
+	self.fps_lbl:Show(not graph and detailed)
+	self.fps_val:Show(not graph and detailed)
+	self.min_lbl:Show(not graph and detailed)
+	self.min_val:Show(not graph and detailed)
+	self.max_lbl:Show(not graph and detailed)
+	self.max_val:Show(not graph and detailed)
+
+	if self.graph_root then
+		self.graph_root:Show(graph)
+	end
+	self.graph_max_val:Show(graph)
+	self.graph_fps_val:Show(graph)
+	self.graph_min_val:Show(graph)
 end
 
 function ui_dorn_fps_counter:SetSimple(fps)
-	if self.detailed then
-		self:SetMode(false)
+	if self.display_mode ~= DISPLAY.SIMPLE_SMALL and self.display_mode ~= DISPLAY.SIMPLE_LARGE then
+		return
 	end
 	self.fps_simple:SetText(self:Colored(fps))
 end
 
 function ui_dorn_fps_counter:SetDetailed(fps, min_fps, max_fps)
-	if not self.detailed then
-		self:SetMode(true)
+	if self.display_mode < DISPLAY.DETAILED_SMALL or display_uses_graph(self.display_mode) then
+		return
 	end
 	self.fps_val:SetText(self:Colored(fps))
 	self.min_val:SetText(self:Colored(min_fps))
 	self.max_val:SetText(self:Colored(max_fps))
 end
 
+function ui_dorn_fps_counter:SetGraphValues(fps, min_fps, max_fps)
+	if not display_uses_graph(self.display_mode) then
+		return
+	end
+	self.graph_max_val:SetText(self:Colored(max_fps))
+	self.graph_fps_val:SetText(self:Colored(fps))
+	self.graph_min_val:SetText(self:Colored(min_fps))
+end
+
 function ui_dorn_fps_counter:ApplyConfig(cfg)
 	self.cfg = cfg
+	local mode = cfg.display_mode or DISPLAY.SIMPLE_SMALL
+	local font_idx = display_font_idx(mode)
 
 	for _, wnd in ipairs(self.text_wnds) do
-		wnd:SetFont(cfg.font)
+		wnd:SetFont(FONTS[font_idx])
 		pcall(function()
-			wnd:SetTextAlignment(0) -- alLeft; reapply after SetFont
+			wnd:SetTextAlignment(0)
 		end)
 	end
 
-	self:SetMode(cfg.minmax_window > 0)
-	self.fps_lbl:SetText(self:Colored("FPS:"))
-	self.min_lbl:SetText(self:Colored("Min:"))
-	self.max_lbl:SetText(self:Colored("Max:"))
+	self:SetDisplayMode(mode)
+
+	if display_uses_graph(mode) then
+		self:ApplyGraphLayout(display_graph_idx(mode))
+	else
+		self:ClearGraph()
+		self:ApplyTextLayout(font_idx)
+		if mode >= DISPLAY.DETAILED_SMALL then
+			self.fps_lbl:SetText(self:Colored("FPS:"))
+			self.min_lbl:SetText(self:Colored("Min:"))
+			self.max_lbl:SetText(self:Colored("Max:"))
+		end
+	end
+
+	self:ApplyGraphColors(cfg)
 	self.wnd:SetWndPos(vector2():set(cfg.pos_x or 0, cfg.pos_y or 0))
 end
