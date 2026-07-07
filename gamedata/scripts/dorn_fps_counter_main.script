@@ -7,6 +7,11 @@
 
 	sample_buf capacity = ceil(sample_window * max_fps): one slot per frame at up to max_fps.
 	history_buf capacity = history_window * refresh_rate: one slot per HUD refresh.
+
+	When long_frame_threshold_ms > 0 (and debug logging is on), every frame's delta is
+	compared against it; a frame exceeding the threshold logs a warning so log lines
+	just before it can be inspected to find the cause. The gap spanning a loading
+	screen is not a real frame, so it's excluded via actor_on_first_update.
 ]]
 
 local MOD_ID = "dorn_fps_counter"
@@ -55,6 +60,7 @@ local CONFIG = {
 	graph_border_b = 96,
 	graph_border_a = 128,
 	debug_log = false,
+	long_frame_threshold_ms = 0,
 }
 
 local hud = nil
@@ -65,6 +71,7 @@ local history_buf = nil
 local graph_buf = nil
 local next_display_time = 0
 local wait_until_time = 0
+local last_frame_time_ms = nil
 
 -- FPS samples/refreshes change many times per second and aren't something the
 -- player can usefully watch or time, so this mod only supports file logging.
@@ -155,6 +162,23 @@ local function update_wait_until_time()
 	wait_until_time = device():time_global() + CONFIG.sample_window * 1000
 end
 
+local function check_long_frame(current_time_ms)
+	if not last_frame_time_ms then
+		last_frame_time_ms = current_time_ms
+		return
+	end
+
+	local frame_ms = current_time_ms - last_frame_time_ms
+	last_frame_time_ms = current_time_ms
+
+	if CONFIG.long_frame_threshold_ms > 0 and frame_ms > CONFIG.long_frame_threshold_ms then
+		log(string.format(
+			"LONG FRAME WARNING! The last frame took %dms to complete, you may be able to see why from logs previous to this one.",
+			frame_ms
+		))
+	end
+end
+
 local function mcm_byte(v)
 	return math.floor(math.max(0, math.min(255, tonumber(v) or 0) + 0.5))
 end
@@ -162,6 +186,7 @@ end
 local function on_option_change()
 	CONFIG.enabled_default = DORN.mcm.bool(MOD_ID, "main/enabled_default", true)
 	CONFIG.debug_log = DORN.mcm.bool(MOD_ID, "development/debug_log", false)
+	CONFIG.long_frame_threshold_ms = DORN.mcm.number(MOD_ID, "development/long_frame_threshold_ms", 0)
 	CONFIG.toggle_key = DORN.mcm.key(MOD_ID, "main/toggle_key", 0)
 	CONFIG.display_mode = DORN.mcm.number(MOD_ID, "main/display", DISPLAY.SIMPLE_SMALL)
 	CONFIG.sample_window = DORN.mcm.number(MOD_ID, "main/sample_window", 0.5)
@@ -241,18 +266,17 @@ local function get_minmax_fps(current_time_ms)
 	return min_fps or 0, max_fps or 0
 end
 
+-- Runs every frame while the HUD is visible; keep this free of per-frame
+-- logging (even under debug_log) so debug mode doesn't itself tank FPS/log size.
+-- Only check_long_frame's slow-frame warning should log from here.
 local function on_unique_update()
+	local current_time_ms = device():time_global()
+	check_long_frame(current_time_ms)
+
 	if not sample_buf or not history_buf or not hud then
-		log(string.format(
-			"State: skipping due to empty vars (sample_buf=%s, history_buf=%s, hud=%s)",
-			tostring(sample_buf ~= nil),
-			tostring(history_buf ~= nil),
-			tostring(hud ~= nil)
-		))
 		return
 	end
 
-	local current_time_ms = device():time_global()
 	local mode = CONFIG.display_mode
 	local use_graph = display_uses_graph(mode)
 	local use_history = display_uses_history(mode)
@@ -260,10 +284,6 @@ local function on_unique_update()
 	sample_buf:push(current_time_ms)
 
 	if current_time_ms < wait_until_time then
-		log(string.format(
-			"State: Warming up (new: %dms, wait: %dms, n=%d)",
-			current_time_ms, wait_until_time, sample_buf.count
-		))
 		if use_graph then
 			hud:SetGraphValues("...", "...", "...")
 			graph_clear()
@@ -320,12 +340,14 @@ local function on_actor_on_update()
 		hud:ApplyConfig(CONFIG)
 		get_hud():AddDialogToRender(hud)
 		next_display_time = 0
+		last_frame_time_ms = nil
 		AddUniqueCall(on_unique_update)
 	elseif not visible and hud then
 		RemoveUniqueCall(on_unique_update)
 		get_hud():RemoveDialogToRender(hud)
 		hud = nil
 		graph_clear()
+		last_frame_time_ms = nil
 	end
 end
 
@@ -334,6 +356,13 @@ local function on_key_press(key)
 		visible = not visible
 		update_wait_until_time()
 	end
+end
+
+-- Fires once right after loading finishes (level start/load/transition). The
+-- engine doesn't tick actor_on_update while a loading screen is up, so the
+-- gap since the last frame is loading time, not a real long frame; drop it.
+local function on_actor_first_update()
+	last_frame_time_ms = nil
 end
 
 function on_game_start()
@@ -345,9 +374,11 @@ function on_game_start()
 	history_buf = nil
 	graph_buf = nil
 	next_display_time = 0
+	last_frame_time_ms = nil
 	hud = nil
 
 	RegisterScriptCallback("actor_on_update", on_actor_on_update)
+	RegisterScriptCallback("actor_on_first_update", on_actor_first_update)
 	RegisterScriptCallback("on_key_press", on_key_press)
 	RegisterScriptCallback("on_option_change", on_option_change)
 end
