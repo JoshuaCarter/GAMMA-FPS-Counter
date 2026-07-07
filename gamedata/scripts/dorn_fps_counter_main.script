@@ -10,7 +10,7 @@
 ]]
 
 local MOD_ID = "dorn_fps_counter"
-local DORN_COMMON_VERSION = "dorn_common_7367f5e7" -- managed by sync-dorn-common.sh, do not hand-edit
+local DORN_COMMON_VERSION = "dorn_common_3ea88f51" -- managed by sync-dorn-common.sh, do not hand-edit
 
 local DORN
 
@@ -66,14 +66,14 @@ local graph_buf = nil
 local next_display_time = 0
 local wait_until_time = 0
 
-local LOG = {
-	STATE = { order = 0, color = "gray" },
-	SAMPLE = { order = 1, color = "green" },
-}
-
-local function log(slot, msg)
-	if DORN and DORN.dbg and CONFIG.debug_log then
-		DORN.dbg.write(MOD_ID, slot.order, "[FPS] " .. tostring(msg), slot.color)
+-- FPS samples/refreshes change many times per second and aren't something the
+-- player can usefully watch or time, so this mod only supports file logging.
+local function log(msg)
+	if not (DORN and DORN.dbg) then
+		return
+	end
+	if CONFIG.debug_log then
+		DORN.dbg.log(MOD_ID, tostring(msg))
 	end
 end
 
@@ -184,8 +184,6 @@ local function on_option_change()
 	CONFIG.graph_border_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_b", 96))
 	CONFIG.graph_border_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_border_a", 128))
 
-	DORN.dbg.set_enabled(MOD_ID, CONFIG.debug_log)
-
 	local sample_len = math.max(1, math.ceil(CONFIG.sample_window * CONFIG.max_fps))
 	if not sample_buf or sample_buf.cap ~= sample_len then
 		sample_buf = _G.dorn_ring_buffer.new(sample_len)
@@ -245,7 +243,7 @@ end
 
 local function on_unique_update()
 	if not sample_buf or not history_buf or not hud then
-		log(LOG.STATE, string.format(
+		log(string.format(
 			"State: skipping due to empty vars (sample_buf=%s, history_buf=%s, hud=%s)",
 			tostring(sample_buf ~= nil),
 			tostring(history_buf ~= nil),
@@ -259,11 +257,10 @@ local function on_unique_update()
 	local use_graph = display_uses_graph(mode)
 	local use_history = display_uses_history(mode)
 
-	log(LOG.SAMPLE, string.format("Sample: %d", current_time_ms))
 	sample_buf:push(current_time_ms)
 
 	if current_time_ms < wait_until_time then
-		log(LOG.STATE, string.format(
+		log(string.format(
 			"State: Warming up (new: %dms, wait: %dms, n=%d)",
 			current_time_ms, wait_until_time, sample_buf.count
 		))
@@ -282,7 +279,6 @@ local function on_unique_update()
 
 	local interval = math.floor(1000 / math.max(1, CONFIG.refresh_rate) + 0.5)
 	if current_time_ms < next_display_time then
-		log(LOG.STATE, "State: Waiting")
 		return
 	end
 	next_display_time = current_time_ms + interval
@@ -292,8 +288,6 @@ local function on_unique_update()
 	if use_history and history_window_sec() > 0 then
 		history_buf:push({ fps, current_time_ms })
 	end
-
-	log(LOG.STATE, "State: Refreshing")
 
 	if use_graph then
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
