@@ -40,13 +40,28 @@
 		<text>Graph with FPS and min/max - Large</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_pos_desc">
-		<text>Top-left position in HUD pixels (0-1024 x 0-768)</text>
+		<text>Offset from the chosen screen corner in HUD pixels (0-1024 x 0-768). At 0,0 the counter sits flush in that corner.</text>
+	</string>
+	<string id="ui_mcm_dorn_fps_counter_pos_anchor">
+		<text>Screen anchor (position relative to this corner)</text>
+	</string>
+	<string id="dorn_fps_counter_main_pos_anchor_lst_top_left">
+		<text>Top left</text>
+	</string>
+	<string id="dorn_fps_counter_main_pos_anchor_lst_top_right">
+		<text>Top right</text>
+	</string>
+	<string id="dorn_fps_counter_main_pos_anchor_lst_bottom_left">
+		<text>Bottom left</text>
+	</string>
+	<string id="dorn_fps_counter_main_pos_anchor_lst_bottom_right">
+		<text>Bottom right</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_pos_x">
-		<text>Horizontal position</text>
+		<text>Horizontal offset from anchor</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_pos_y">
-		<text>Vertical position</text>
+		<text>Vertical offset from anchor</text>
 	</string>
 	<string id="ui_mcm_dorn_fps_counter_sample_window">
 		<text>How many seconds of frame times to average for FPS</text>
