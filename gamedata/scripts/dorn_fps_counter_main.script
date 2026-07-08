@@ -11,11 +11,14 @@
 	When long_frame_threshold_ms > 0 (and debug logging is on), every frame's delta is
 	compared against it; a frame exceeding the threshold logs a warning so log lines
 	just before it can be inspected to find the cause. The gap spanning a loading
-	screen is not a real frame, so it's excluded via actor_on_first_update.
+	screen is not a real frame, so it's excluded via actor_on_first_update. Frames
+	while the game is paused (menu, console, etc.) aren't real gameplay frames either
+	- the engine keeps calling this per-frame and can throttle its rate while paused,
+	which would otherwise look like a slow frame - so those are excluded too.
 ]]
 
 local MOD_ID = "dorn_fps_counter"
-local DORN_COMMON_VERSION = "dorn_common_105895da" -- managed by sync-dorn-common.sh, do not hand-edit
+local DORN_COMMON_VERSION = "dorn_common_f575cc9b" -- managed by sync-dorn-common.sh, do not hand-edit
 
 local DORN
 
@@ -163,6 +166,11 @@ local function update_wait_until_time()
 end
 
 local function check_long_frame(current_time_ms)
+	if device():is_paused() then
+		last_frame_time_ms = current_time_ms
+		return
+	end
+
 	if not last_frame_time_ms then
 		last_frame_time_ms = current_time_ms
 		return
