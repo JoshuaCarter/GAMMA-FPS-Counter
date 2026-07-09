@@ -61,7 +61,7 @@ local CONFIG = {
 	text_r = 255,
 	text_g = 255,
 	text_b = 255,
-	text_a = 255,
+	text_a = 200,
 	graph_line_r = 255,
 	graph_line_g = 255,
 	graph_line_b = 255,
@@ -216,7 +216,7 @@ local function on_option_change()
 	CONFIG.text_r = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_r", 255))
 	CONFIG.text_g = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_g", 255))
 	CONFIG.text_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_b", 255))
-	CONFIG.text_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_a", 255))
+	CONFIG.text_a = mcm_byte(DORN.mcm.number(MOD_ID, "colors/text_a", 200))
 	CONFIG.graph_line_r = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_r", 255))
 	CONFIG.graph_line_g = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_g", 255))
 	CONFIG.graph_line_b = mcm_byte(DORN.mcm.number(MOD_ID, "colors/graph_line_b", 255))

@@ -1,6 +1,6 @@
 # Dorn's FPS Counter
 
-A simple FPS readout for **S.T.A.L.K.E.R. G.A.M.M.A.** — FPS on screen, optional mix/max from recent history, optional graph.
+A simple FPS readout for **S.T.A.L.K.E.R. G.A.M.M.A.** — FPS on screen, optional min/max from recent history, optional graph.
 
 ## What this mod does
 
