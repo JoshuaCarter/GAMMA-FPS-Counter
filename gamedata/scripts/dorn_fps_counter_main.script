@@ -99,10 +99,6 @@ local function display_font_idx(mode)
 	return mode % 2
 end
 
-local function display_graph_idx(mode)
-	return mode % 2
-end
-
 local function display_uses_graph(mode)
 	return mode >= DISPLAY.GRAPH_SMALL
 end
@@ -887,7 +883,7 @@ function ui_dorn_fps_counter:ApplyConfig(cfg)
 	self:SetDisplayMode(mode)
 
 	if display_uses_graph(mode) then
-		self:ApplyGraphLayout(display_graph_idx(mode), anchor)
+		self:ApplyGraphLayout(display_font_idx(mode), anchor)
 	else
 		self:ClearGraph()
 		self:ApplyTextLayout(font_idx, anchor, mode)
@@ -901,7 +897,7 @@ function ui_dorn_fps_counter:ApplyConfig(cfg)
 	self:ApplyGraphColors(cfg)
 
 	local layout = self.layout
-		or (display_uses_graph(mode) and HUD_LAYOUT.graph[display_graph_idx(mode)])
+		or (display_uses_graph(mode) and HUD_LAYOUT.graph[display_font_idx(mode)])
 		or HUD_LAYOUT.text[font_idx]
 	local content_w = self.content_w or layout.wnd_w
 	local content_h = self.content_h or layout.wnd_h
