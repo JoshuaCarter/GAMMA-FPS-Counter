@@ -88,7 +88,7 @@ function on_mcm_load()
 						type = "list",
 						val = 2,
 						def = 0,
-						hint = "ui_mcm_dorn_fps_counter_pos_anchor",
+						hint = "dorn_fps_counter_pos_anchor",
 						content = {
 							{ 0, "top_left" },
 							{ 1, "top_right" },

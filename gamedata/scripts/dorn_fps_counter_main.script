@@ -118,30 +118,6 @@ local function history_buf_cap()
 	return math.max(1, math.floor(history_window_sec() * CONFIG.refresh_rate + 0.5))
 end
 
-local function prune_history_buf(current_time_ms)
-	if not history_buf or history_buf.count <= 0 then
-		return
-	end
-	local window = history_window_sec()
-	if window <= 0 then
-		return
-	end
-	local cutoff = current_time_ms - window * 1000
-	while history_buf.count > 0 and history_buf:get(1)[2] < cutoff do
-		history_buf:shift()
-	end
-end
-
-local function prune_graph_buf(current_time_ms)
-	if not graph_buf or graph_buf.count <= 0 then
-		return
-	end
-	local cutoff = current_time_ms - history_window_sec() * 1000
-	while graph_buf.count > 0 and graph_buf:get(1)[2] < cutoff do
-		graph_buf:shift()
-	end
-end
-
 local function graph_clear()
 	if hud then
 		hud:ClearGraph()
@@ -151,44 +127,8 @@ local function graph_clear()
 	end
 end
 
-local function graph_push(fps, current_time_ms)
-	if not display_uses_graph(CONFIG.display_mode) then
-		return
-	end
-	if not graph_buf or graph_buf.cap ~= history_buf_cap() then
-		graph_buf = _G.dorn_ring_buffer.new(history_buf_cap())
-	end
-	graph_buf:push({ fps, current_time_ms })
-	prune_graph_buf(current_time_ms)
-	if hud then
-		hud:DrawGraph(graph_buf, CONFIG)
-	end
-end
-
 local function update_wait_until_time()
 	wait_until_time = device():time_global() + CONFIG.sample_window * 1000
-end
-
-local function check_long_frame(current_time_ms)
-	if device():is_paused() then
-		last_frame_time_ms = current_time_ms
-		return
-	end
-
-	if not last_frame_time_ms then
-		last_frame_time_ms = current_time_ms
-		return
-	end
-
-	local frame_ms = current_time_ms - last_frame_time_ms
-	last_frame_time_ms = current_time_ms
-
-	if CONFIG.long_frame_threshold_ms > 0 and frame_ms > CONFIG.long_frame_threshold_ms then
-		log(string.format(
-			"LONG FRAME WARNING! The last frame took %dms to complete, you may be able to see why from logs previous to this one.",
-			frame_ms
-		))
-	end
 end
 
 local function mcm_byte(v)
@@ -243,26 +183,19 @@ local function on_option_change()
 	update_wait_until_time()
 end
 
-local function get_fps(current_time_ms)
-	if not sample_buf or sample_buf.count <= 0 then
-		return 0
-	end
-
-	local cutoff_time_ms = current_time_ms - CONFIG.sample_window * 1000
-
-	while sample_buf.count > 0 and sample_buf:get(1) < cutoff_time_ms do
-		sample_buf:shift()
-	end
-
-	return math.floor(sample_buf.count / CONFIG.sample_window + 0.5)
-end
-
 local function get_minmax_fps(current_time_ms)
 	if not history_buf or history_buf.count <= 0 then
 		return 0, 0
 	end
 
-	prune_history_buf(current_time_ms)
+	-- drop history samples older than minmax/graph window
+	local window = history_window_sec()
+	if window > 0 then
+		local cutoff = current_time_ms - window * 1000
+		while history_buf.count > 0 and history_buf:get(1)[2] < cutoff do
+			history_buf:shift()
+		end
+	end
 
 	local min_fps, max_fps = nil, nil
 
@@ -281,10 +214,25 @@ end
 
 -- Runs every frame while the HUD is visible; keep this free of per-frame
 -- logging (even under debug_log) so debug mode doesn't itself tank FPS/log size.
--- Only check_long_frame's slow-frame warning should log from here.
+-- Only the slow-frame warning below should log from here.
 local function on_unique_update()
 	local current_time_ms = device():time_global()
-	check_long_frame(current_time_ms)
+
+	-- compare frame delta against long_frame_threshold_ms (skip paused/loading gaps)
+	if device():is_paused() then
+		last_frame_time_ms = current_time_ms
+	elseif not last_frame_time_ms then
+		last_frame_time_ms = current_time_ms
+	else
+		local frame_ms = current_time_ms - last_frame_time_ms
+		last_frame_time_ms = current_time_ms
+		if CONFIG.long_frame_threshold_ms > 0 and frame_ms > CONFIG.long_frame_threshold_ms then
+			log(string.format(
+				"LONG FRAME WARNING! The last frame took %dms to complete, you may be able to see why from logs previous to this one.",
+				frame_ms
+			))
+		end
+	end
 
 	if not sample_buf or not history_buf or not hud then
 		return
@@ -316,7 +264,15 @@ local function on_unique_update()
 	end
 	next_display_time = current_time_ms + interval
 
-	local fps = get_fps(current_time_ms)
+	-- average FPS over sample_window from recent frame timestamps
+	local fps = 0
+	if sample_buf.count > 0 then
+		local cutoff_time_ms = current_time_ms - CONFIG.sample_window * 1000
+		while sample_buf.count > 0 and sample_buf:get(1) < cutoff_time_ms do
+			sample_buf:shift()
+		end
+		fps = math.floor(sample_buf.count / CONFIG.sample_window + 0.5)
+	end
 
 	if use_history and history_window_sec() > 0 then
 		history_buf:push({ fps, current_time_ms })
@@ -325,7 +281,15 @@ local function on_unique_update()
 	if use_graph then
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
 		hud:SetGraphValues(fps, min_fps, max_fps)
-		graph_push(fps, current_time_ms)
+		if not graph_buf or graph_buf.cap ~= history_buf_cap() then
+			graph_buf = _G.dorn_ring_buffer.new(history_buf_cap())
+		end
+		graph_buf:push({ fps, current_time_ms })
+		local graph_cutoff = current_time_ms - history_window_sec() * 1000
+		while graph_buf.count > 0 and graph_buf:get(1)[2] < graph_cutoff do
+			graph_buf:shift()
+		end
+		hud:DrawGraph(graph_buf, CONFIG)
 	elseif use_history then
 		graph_clear()
 		local min_fps, max_fps = get_minmax_fps(current_time_ms)
@@ -402,26 +366,8 @@ local function anchor_is_right(anchor)
 	return anchor == ANCHOR.TOP_RIGHT or anchor == ANCHOR.BOTTOM_RIGHT
 end
 
-local function anchor_is_bottom(anchor)
-	return anchor == ANCHOR.BOTTOM_LEFT or anchor == ANCHOR.BOTTOM_RIGHT
-end
-
 local function text_align_for_anchor(anchor)
 	return anchor_is_right(anchor) and 1 or 0 -- alRight=1, alLeft=0
-end
-
--- Map anchor-relative offset + content bounds to top-left screen position for self.wnd.
--- pos_x/pos_y are inset from the anchored corner of the content box (not the full HUD).
--- Right/bottom anchors subtract offset from that edge, then subtract content size to get top-left.
-local function screen_pos_for_anchor(anchor, pos_x, pos_y, content_w, content_h)
-	local x, y = pos_x or 0, pos_y or 0
-	if anchor_is_right(anchor) then
-		x = UI_WIDTH - content_w - x
-	end
-	if anchor_is_bottom(anchor) then
-		y = UI_HEIGHT - content_h - y
-	end
-	return x, y
 end
 
 -- Layout tables (edit here to tune). text[0/1] = small/large font; graph[0/1] = small/large graph.
@@ -476,12 +422,12 @@ local function argb_from_bytes(a, r, g, b)
 	return GetARGB(mcm_byte(a), mcm_byte(r), mcm_byte(g), mcm_byte(b))
 end
 
-local function init_text_wnd(wnd, align)
+local function init_text_wnd(text_wnd, align)
 	pcall(function()
-		wnd:SetTextComplexMode(true)
-		wnd:SetTextAlignment(align or 0)
+		text_wnd:SetTextComplexMode(true)
+		text_wnd:SetTextAlignment(align or 0)
 	end)
-	return wnd
+	return text_wnd
 end
 
 class "ui_dorn_fps_counter" (CUIScriptWnd)
@@ -538,26 +484,26 @@ function ui_dorn_fps_counter:TextAlign()
 end
 
 -- Plain single-color text so SetTextAlignment works (%c[] complex tags break right align).
-function ui_dorn_fps_counter:SetWndText(wnd, text)
-	if not wnd then
+function ui_dorn_fps_counter:SetWndText(text_wnd, text)
+	if not text_wnd then
 		return
 	end
 	local align = self:TextAlign()
 	pcall(function()
-		wnd:SetTextComplexMode(false)
-		wnd:SetTextAlignment(align)
-		wnd:SetTextColor(self:TextColor())
-		wnd:SetText(tostring(text))
+		text_wnd:SetTextComplexMode(false)
+		text_wnd:SetTextAlignment(align)
+		text_wnd:SetTextColor(self:TextColor())
+		text_wnd:SetText(tostring(text))
 	end)
 end
 
-function ui_dorn_fps_counter:PlaceTextWnd(wnd, x, y, w, h)
-	if not wnd then
+function ui_dorn_fps_counter:PlaceTextWnd(text_wnd, x, y, w, h)
+	if not text_wnd then
 		return
 	end
 	HUD_TEXT_RECT:set(x, y, x + w, y + h)
-	wnd:SetWndRect(HUD_TEXT_RECT)
-	wnd:SetWndPos(HUD_LAYOUT_VEC:set(x, y))
+	text_wnd:SetWndRect(HUD_TEXT_RECT)
+	text_wnd:SetWndPos(HUD_LAYOUT_VEC:set(x, y))
 end
 
 function ui_dorn_fps_counter:SetWndPanelSize(w, h)
@@ -656,23 +602,23 @@ function ui_dorn_fps_counter:InitGraph()
 	self:ApplyGraphColors(self.cfg)
 end
 
-function ui_dorn_fps_counter:ApplyStaticColor(st, r, g, b, a)
-	if not st then
+function ui_dorn_fps_counter:ApplyStaticColor(graph_pixel, r, g, b, a)
+	if not graph_pixel then
 		return
 	end
-	if not st._dorn_graph_tex then
+	if not graph_pixel._dorn_graph_tex then
 		pcall(function()
-			st:RemoveColorAnimation()
+			graph_pixel:RemoveColorAnimation()
 		end)
 		pcall(function()
-			st:InitTexture(GRAPH_TEXTURE)
+			graph_pixel:InitTexture(GRAPH_TEXTURE)
 		end)
 		pcall(function()
-			st:SetStretchTexture(true)
+			graph_pixel:SetStretchTexture(true)
 		end)
-		st._dorn_graph_tex = true
+		graph_pixel._dorn_graph_tex = true
 	end
-	st:SetTextureColor(argb_from_bytes(a, r, g, b))
+	graph_pixel:SetTextureColor(argb_from_bytes(a, r, g, b))
 end
 
 function ui_dorn_fps_counter:ApplyGraphColors(cfg)
@@ -876,8 +822,8 @@ function ui_dorn_fps_counter:ApplyConfig(cfg)
 	local mode = cfg.display_mode or DISPLAY.SIMPLE_SMALL
 	local font_idx = display_font_idx(mode)
 	local anchor = cfg.pos_anchor or ANCHOR.TOP_LEFT
-	for _, wnd in ipairs(self.text_wnds) do
-		wnd:SetFont(FONTS[font_idx])
+	for _, text_wnd in ipairs(self.text_wnds) do
+		text_wnd:SetFont(FONTS[font_idx])
 	end
 
 	self:SetDisplayMode(mode)
@@ -901,12 +847,13 @@ function ui_dorn_fps_counter:ApplyConfig(cfg)
 		or HUD_LAYOUT.text[font_idx]
 	local content_w = self.content_w or layout.wnd_w
 	local content_h = self.content_h or layout.wnd_h
-	local pos_x, pos_y = screen_pos_for_anchor(
-		anchor,
-		cfg.pos_x,
-		cfg.pos_y,
-		content_w,
-		content_h
-	)
+	-- Map anchor-relative offset + content bounds to top-left screen position for self.wnd.
+	local pos_x, pos_y = cfg.pos_x or 0, cfg.pos_y or 0
+	if anchor_is_right(anchor) then
+		pos_x = UI_WIDTH - content_w - pos_x
+	end
+	if anchor == ANCHOR.BOTTOM_LEFT or anchor == ANCHOR.BOTTOM_RIGHT then
+		pos_y = UI_HEIGHT - content_h - pos_y
+	end
 	self.wnd:SetWndPos(vector2():set(pos_x, pos_y))
 end
