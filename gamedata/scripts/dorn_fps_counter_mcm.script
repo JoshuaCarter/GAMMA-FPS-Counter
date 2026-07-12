@@ -8,6 +8,7 @@ end
 
 
 
+
 function on_mcm_load()
 	local MCM = dorn_mcm()
 	return {
@@ -127,7 +128,7 @@ function on_mcm_load()
 						def = 0,
 						hint = "dorn_fps_counter_pos_y",
 					},
-				},
+				}),
 			},
 			{
 				id = "colors",
@@ -270,7 +271,7 @@ function on_mcm_load()
 						def = 200,
 						hint = "dorn_fps_counter_graph_border_a",
 					},
-				},
+				}),
 			},
 			{
 				id = "development",
@@ -299,7 +300,7 @@ function on_mcm_load()
 						def = 0,
 						hint = "dorn_fps_counter_long_frame_threshold_ms",
 					},
-				},
+				}),
 			},
 		},
 	}
