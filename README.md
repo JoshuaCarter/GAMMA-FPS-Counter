@@ -18,15 +18,5 @@ A simple FPS readout for **S.T.A.L.K.E.R. G.A.M.M.A.** — FPS on screen, option
 <img width="960" height="540" alt="screenshot_1" src="https://github.com/user-attachments/assets/d28635cb-cc67-4e69-9c69-e830eab15142" />
 <img width="550" height="400" alt="Options" src="https://github.com/user-attachments/assets/3236aebc-0556-47e4-9ed5-c4860de26435" />
 
-## Other mods
-
-- https://github.com/JoshuaCarter/GAMMA-Dont-ReEquip-PDA
-- https://github.com/JoshuaCarter/GAMMA-Faster-Skinning
-- https://github.com/JoshuaCarter/GAMMA-FPS-Counter
-- https://github.com/JoshuaCarter/GAMMA-Giant-Jump
-- https://github.com/JoshuaCarter/GAMMA-Optimal-Tool-Use
-- https://github.com/JoshuaCarter/GAMMA-Pose-Controls
-- https://github.com/JoshuaCarter/GAMMA-Prone-Fix
-- https://github.com/JoshuaCarter/GAMMA-Radiation-Grain-Fix
-- https://github.com/JoshuaCarter/GAMMA-Strip-Everything
-- https://github.com/JoshuaCarter/GAMMA-Tooltip-Weapon-Damage
+## See my other mods here:
+https://github.com/JoshuaCarter/GAMMA-Mods
