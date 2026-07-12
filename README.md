@@ -19,4 +19,5 @@ A simple FPS readout for **S.T.A.L.K.E.R. G.A.M.M.A.** — FPS on screen, option
 <img width="550" height="400" alt="Options" src="https://github.com/user-attachments/assets/3236aebc-0556-47e4-9ed5-c4860de26435" />
 
 ## See my other mods here:
+
 https://github.com/JoshuaCarter/GAMMA-Mods
